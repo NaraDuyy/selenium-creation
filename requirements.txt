@@ -1,0 +1,6 @@
+# Undetected Chrome via SeleniumBase UC mode (actively maintained, Chrome 140+ safe)
+seleniumbase>=4.34.0
+
+# Optional fallback engine -- only needed if config.json sets "engine": "undetected".
+# Install manually, it pins an older selenium and can conflict:
+#   .venv\Scripts\python.exe -m pip install undetected-chromedriver

@@ -1,0 +1,19 @@
+{
+  "engine": "seleniumbase",
+  "protocol": "http",
+
+  "nhamang": "random",
+  "tinhthanh": "0",
+  "whitelist": "",
+
+  "start_url": "https://whoer.net",
+  "headless": false,
+  "window_size": "1280,860",
+
+  "api_timeout": 30,
+  "api_max_retries": 5,
+  "api_retry_delay": 10,
+  "api_max_wait": 120,
+
+  "keep_profile": false
+}
