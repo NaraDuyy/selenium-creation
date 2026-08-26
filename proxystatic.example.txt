@@ -1,0 +1,17 @@
+# Static proxies -- one per line. These win over the rotating API by default.
+# Rename this file to proxystatic.txt and paste your own endpoints in.
+#
+# Any of these shapes works:
+#
+#   160.250.166.14:10056
+#   160.250.166.14:10056:username:password
+#   username:password@160.250.166.14:10056
+#   http://username:password@160.250.166.14:10056
+#   socks5://160.250.166.14:30056
+#
+# Anything after a | is a label shown in logs and the benchmark table:
+#
+#   160.250.166.14:10056:user:pass | hanoi-fpt-1
+#   160.250.166.14:10057:user:pass | hanoi-fpt-2
+
+PASTE-YOUR-STATIC-PROXIES-HERE

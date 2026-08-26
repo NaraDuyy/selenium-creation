@@ -1,5 +1,7 @@
-# Secrets -- your rotating-proxy key never belongs in git
+# Secrets -- these never belong in git
 proxykey.txt
+proxystatic.txt
+staticproxy.txt
 
 # Python
 .venv/
@@ -9,8 +11,10 @@ __pycache__/
 # Runtime artifacts
 profiles/
 logs/
-downloaded_files/
 latest_logs/
+downloaded_files/
 assets/
 chromedriver*
 uc_driver*
+.static_state.json
+bench_results.json

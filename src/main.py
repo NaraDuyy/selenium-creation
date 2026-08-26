@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import browser
 import proxy_client
+import static_proxy
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
@@ -27,6 +28,8 @@ DEFAULTS = {
     "nhamang": "random",
     "tinhthanh": "0",
     "whitelist": "",
+    "prefer_static": True,
+    "static_select": "first",
     "start_url": "https://whoer.net",
     "headless": False,
     "window_size": "1280,860",
@@ -74,7 +77,14 @@ def parse_args(argv):
     )
     parser.add_argument("--url", help="page to open instead of config start_url")
     parser.add_argument("--no-proxy", action="store_true",
-                        help="skip the API and launch on a direct connection")
+                        help="skip every proxy and launch on a direct connection")
+    parser.add_argument("--static", action="store_true",
+                        help="force a static proxy, fail rather than fall back")
+    parser.add_argument("--rotate", action="store_true",
+                        help="force a rotating proxy even when static ones exist")
+    parser.add_argument("--static-select",
+                        choices=["first", "random", "roundrobin", "fastest"],
+                        help="which static proxy to take when several are listed")
     parser.add_argument("--headless", action="store_true", help="run without a window")
     parser.add_argument("--socks5", action="store_true",
                         help="use the socks5 endpoint instead of http")
@@ -89,8 +99,23 @@ def parse_args(argv):
     return parser.parse_args(argv)
 
 
-def obtain_proxy(config, key):
-    print("[1/3] Rotating proxy ...")
+def obtain_static(config):
+    """Return a static proxy if the list has one, else None."""
+    try:
+        proxies = static_proxy.load(config["protocol"])
+    except static_proxy.StaticProxyError as exc:
+        print(f"      static proxy list problem: {exc}")
+        return None
+    if not proxies:
+        return None
+    chosen = static_proxy.select(proxies, config["static_select"])
+    print(f"      using {chosen.describe()}")
+    print(f"      ({len(proxies)} static listed, picked by {config['static_select']!r})")
+    return chosen
+
+
+def obtain_rotating(config, key):
+    print("      asking the API to rotate ...")
     proxy = proxy_client.fetch_with_retry(
         key,
         nhamang=config["nhamang"],
@@ -106,6 +131,27 @@ def obtain_proxy(config, key):
     if proxy.lifetime:
         print(f"      note {proxy.lifetime}")
     return proxy
+
+
+def choose_proxy(args, config):
+    """Static wins unless told otherwise; rotating is the fallback."""
+    want_static = config["prefer_static"] and not args.rotate
+    if args.static:
+        want_static = True
+
+    if want_static:
+        proxy = obtain_static(config)
+        if proxy is not None:
+            return proxy
+        if args.static:
+            raise SystemExit(
+                "--static was requested but proxystatic.txt has no usable "
+                "entries.\nPaste your static proxies in, one per line, "
+                "then try again."
+            )
+        print("      no static proxies listed -- falling back to rotation")
+
+    return obtain_rotating(config, load_key())
 
 
 IP_ECHO = "https://api.ipify.org?format=json"
@@ -147,6 +193,8 @@ def main(argv=None) -> int:
         config["headless"] = True
     if args.keep_profile:
         config["keep_profile"] = True
+    if args.static_select:
+        config["static_select"] = args.static_select
     if args.nhamang:
         config["nhamang"] = args.nhamang
     if args.tinhthanh:
@@ -161,8 +209,9 @@ def main(argv=None) -> int:
     if args.no_proxy:
         print("[1/3] Proxy skipped (--no-proxy): using a direct connection.")
     else:
+        print("[1/3] Picking a proxy ...")
         try:
-            proxy = obtain_proxy(config, load_key())
+            proxy = choose_proxy(args, config)
         except proxy_client.ProxyApiError as exc:
             print(f"\nProxy API refused: {exc.message} (status {exc.status})")
             if exc.fatal:
@@ -194,10 +243,7 @@ def main(argv=None) -> int:
         return 3
     finally:
         if driver is not None:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+            browser.shutdown(driver)
         if profile_dir is not None and not config["keep_profile"]:
             browser.discard_profile(profile_dir)
 

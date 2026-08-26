@@ -76,6 +76,8 @@ class Proxy:
     carrier: str = ""
     location: str = ""
     lifetime: str = ""
+    source: str = "rotating"   # "rotating" | "static"
+    label: str = ""            # human tag for static entries
 
     @property
     def has_auth(self) -> bool:
@@ -89,8 +91,18 @@ class Proxy:
         """Endpoint without credentials -- what Chrome's --proxy-server wants."""
         return f"{self.protocol}://{self.address}"
 
+    def url(self) -> str:
+        """Full endpoint including credentials -- what requests/pip style clients want."""
+        if self.has_auth:
+            user = urllib.parse.quote(self.username, safe="")
+            secret = urllib.parse.quote(self.password, safe="")
+            return f"{self.protocol}://{user}:{secret}@{self.address}"
+        return self.server_url()
+
     def describe(self) -> str:
-        bits = [f"{self.protocol}://{self.address}"]
+        bits = [self.source.upper(), f"{self.protocol}://{self.address}"]
+        if self.label:
+            bits.append(self.label)
         if self.carrier:
             bits.append(self.carrier)
         if self.location:
@@ -172,6 +184,7 @@ def fetch(
         username=proxy.username,
         password=proxy.password,
         protocol=protocol,
+        source="rotating",
         carrier=str(payload.get("Nha Mang", "") or ""),
         location=str(payload.get("Vi Tri", "") or ""),
         lifetime=message,

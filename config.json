@@ -2,6 +2,9 @@
   "engine": "seleniumbase",
   "protocol": "http",
 
+  "prefer_static": true,
+  "static_select": "first",
+
   "nhamang": "random",
   "tinhthanh": "0",
   "whitelist": "",
