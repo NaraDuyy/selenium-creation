@@ -86,14 +86,42 @@ def list_path() -> Path | None:
     return None
 
 
+def _read(path: Path) -> str:
+    """Read the list, turning OS-level failures into something actionable.
+
+    Windows opens a directory with the same call as a file and reports
+    "[Errno 13] Permission denied" rather than "is a directory", so a folder
+    accidentally named proxystatic.txt produces a confusing crash. Name it.
+    """
+    if path.is_dir():
+        raise StaticProxyError(
+            f"{path} is a folder, not a file. Delete the folder and create a "
+            "text file with that name holding one proxy per line."
+        )
+    try:
+        return path.read_text(encoding="utf-8")
+    except PermissionError as exc:
+        raise StaticProxyError(
+            f"cannot read {path} -- permission denied. Check it is not open in "
+            "another program, not read-protected, and that antivirus or "
+            "Controlled Folder Access is not blocking it."
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise StaticProxyError(
+            f"{path.name} is not UTF-8 text. Re-save it as plain UTF-8."
+        ) from exc
+    except OSError as exc:
+        raise StaticProxyError(f"cannot read {path}: {exc}") from exc
+
+
 def load(protocol: str = "http", path: Path | None = None) -> list[Proxy]:
     """Every usable static proxy in the file. Empty list when there are none."""
     path = path or list_path()
-    if path is None or not path.exists():
+    if path is None:
         return []
 
     proxies: list[Proxy] = []
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, raw in enumerate(_read(path).splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#") or line.upper().startswith(_PLACEHOLDER):
             continue
