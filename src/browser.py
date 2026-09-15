@@ -46,6 +46,10 @@ class LaunchError(RuntimeError):
     pass
 
 
+class ProxyUnreachable(LaunchError):
+    """The proxy would not carry a single request, so a browser would load nothing."""
+
+
 class NavigationError(RuntimeError):
     """The browser is up, but the page would not load."""
 
@@ -158,35 +162,69 @@ def _proxy_url(proxy: Proxy) -> str:
     return f"{scheme}://{user}:{password}@{proxy.address}"
 
 
+def _describe_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
 def lookup_geo(proxy: Proxy, timeout: float = 10) -> tuple[str, str, str]:
-    """Ask, through the proxy, where its exit IP is. Returns (ip, country, timezone)."""
+    """Ask, through the proxy, where its exit IP is. Returns (ip, country, timezone).
+
+    Raises ProxyUnreachable when no lookup got any HTTP answer at all -- the
+    proxy itself is broken -- and plain LaunchError when answers came back but
+    were unusable, which says nothing bad about the proxy.
+    """
     import httpx  # installed with cloakbrowser
 
     errors = []
+    answered = False
     for url, ip_key, country_key, tz_key in GEO_LOOKUPS:
         try:
-            data = httpx.get(url, proxy=_proxy_url(proxy), timeout=timeout).json()
-            if data.get(ip_key) and data.get(tz_key):
-                return data[ip_key], data.get(country_key) or "", data[tz_key]
-            errors.append(f"{url}: incomplete answer")
-        except Exception as exc:
-            errors.append(f"{url}: {type(exc).__name__}")
-    raise LaunchError("could not locate the proxy exit IP (" + "; ".join(errors) + ")")
+            response = httpx.get(url, proxy=_proxy_url(proxy), timeout=timeout)
+        except httpx.TransportError as exc:
+            errors.append(f"{url}: {_describe_error(exc)}")
+            continue
+        if response.status_code == 407:
+            # Over plain http the proxy's own refusal arrives as a normal
+            # response, but no traffic got past it.
+            errors.append(f"{url}: proxy rejected the login (HTTP 407)")
+            continue
+        answered = True
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if data.get(ip_key) and data.get(tz_key):
+            return data[ip_key], data.get(country_key) or "", data[tz_key]
+        errors.append(f"{url}: HTTP {response.status_code} without a location")
+
+    detail = "; ".join(errors)
+    if not answered:
+        raise ProxyUnreachable(f"{proxy.describe()} carried no traffic ({detail})")
+    raise LaunchError(f"could not locate the proxy exit IP ({detail})")
 
 
 def build_identity(seed: int, proxy: Proxy | None, window: tuple[int, int],
-                   match_geo: bool) -> Identity:
+                   match_geo: bool, check_proxy: bool = True) -> Identity:
     cores, memory_gb, screen = roll_hardware(seed, window)
     identity = Identity(seed=seed, cores=cores, memory_gb=memory_gb, screen=screen)
-    if proxy is None or not match_geo:
+    if proxy is None or not (match_geo or check_proxy):
         return identity
     try:
-        identity.exit_ip, identity.country, identity.timezone = lookup_geo(proxy)
+        exit_ip, country, timezone = lookup_geo(proxy)
+    except ProxyUnreachable as exc:
+        if check_proxy:
+            raise
+        identity.notes.append(f"{exc} -- launching anyway because check_proxy is off")
+        return identity
     except LaunchError as exc:
         # Launching anyway is still useful; the page just sees this PC's timezone.
         identity.notes.append(f"{exc} -- timezone/language left at system defaults")
         return identity
-    identity.locale = COUNTRY_LOCALE.get(identity.country.upper(), "en-US")
+    if not match_geo:
+        return identity
+    identity.exit_ip, identity.country, identity.timezone = exit_ip, country, timezone
+    identity.locale = COUNTRY_LOCALE.get(country.upper(), "en-US")
     return identity
 
 
@@ -217,8 +255,13 @@ def _parse_window_size(window_size: str) -> tuple[int, int]:
 
 
 def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
-           window_size="1280,860", fingerprint="random", match_geo=True):
-    """Return a live Session on a fresh profile, routed through ``proxy``."""
+           window_size="1280,860", fingerprint="random", match_geo=True,
+           check_proxy=True):
+    """Return a live Session on a fresh profile, routed through ``proxy``.
+
+    With ``check_proxy`` a proxy that carries no traffic raises ProxyUnreachable
+    before any browser is started.
+    """
     try:
         from cloakbrowser import CloakBrowserLicenseError, launch_persistent_context
     except ImportError as exc:  # pragma: no cover
@@ -226,7 +269,8 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
 
     profile_dir = Path(profile_dir) if profile_dir else new_profile_dir()
     width, height = _parse_window_size(window_size)
-    identity = build_identity(pick_seed(fingerprint), proxy, (width, height), match_geo)
+    identity = build_identity(pick_seed(fingerprint), proxy, (width, height),
+                              match_geo, check_proxy)
 
     # Headed: no viewport emulation, so the page tracks the real window and
     # outerWidth >= innerWidth stays coherent. Headless has no window to track.

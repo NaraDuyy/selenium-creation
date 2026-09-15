@@ -77,6 +77,7 @@ Anything you pass to `run.bat` goes straight to the script:
 | `--nhamang <c>` | Carrier for this run, e.g. `fpt`, `viettel`, `vnpt`, `random` |
 | `--tinhthanh <n>` | Province code for this run, `0` = random |
 | `--fingerprint <n>` | Reuse a fingerprint seed printed by an earlier run instead of rolling a new one |
+| `--skip-proxy-check` | Open the browser even when the proxy check says the proxy carries no traffic |
 | `--keep-profile` | Don't delete the throwaway browser profile on exit |
 
 ```bat
@@ -93,6 +94,7 @@ Defaults for every run. Flags win over the file.
 |---|---|---|
 | `fingerprint` | `random` | `random` rolls a new identity every launch; a number pins one |
 | `match_proxy_geo` | `true` | Set timezone, language and WebRTC IP from the proxy's exit IP |
+| `check_proxy` | `true` | Stop before opening a browser if the proxy carries no traffic |
 | `prefer_static` | `true` | Use `proxystatic.txt` before the rotating API |
 | `static_select` | `first` | Which static proxy to take when several are listed |
 | `protocol` | `http` | `http` or `socks5` — which endpoint to take from the API |

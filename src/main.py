@@ -24,6 +24,7 @@ KEY_PATH = ROOT / "proxykey.txt"
 DEFAULTS = {
     "fingerprint": "random",
     "match_proxy_geo": True,
+    "check_proxy": True,
     "protocol": "http",
     "nhamang": "random",
     "tinhthanh": "0",
@@ -92,6 +93,8 @@ def parse_args(argv):
     parser.add_argument("--tinhthanh", help="province code override, 0 = random")
     parser.add_argument("--fingerprint",
                         help='"random" (default) or a seed number to reuse an identity')
+    parser.add_argument("--skip-proxy-check", action="store_true",
+                        help="open the browser even if the proxy carries no traffic")
     parser.add_argument("--keep-profile", action="store_true",
                         help="do not delete the throwaway browser profile on exit")
     parser.add_argument("--check", action="store_true",
@@ -189,6 +192,8 @@ def main(argv=None) -> int:
 
     if args.fingerprint:
         config["fingerprint"] = args.fingerprint
+    if args.skip_proxy_check:
+        config["check_proxy"] = False
     if args.socks5:
         config["protocol"] = "socks5"
     if args.headless:
@@ -230,6 +235,7 @@ def main(argv=None) -> int:
             window_size=config["window_size"],
             fingerprint=config["fingerprint"],
             match_geo=config["match_proxy_geo"],
+            check_proxy=config["check_proxy"],
         )
         print(f"      profile     {profile_dir.name}")
         print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")
@@ -251,6 +257,11 @@ def main(argv=None) -> int:
             # Headless has no window for anyone to close, so do not block on it.
             if not config["headless"]:
                 wait_until_closed(session)
+    except browser.ProxyUnreachable as exc:
+        print(f"\nThe proxy is not working, so no browser was opened:\n      {exc}")
+        print("      Check it is still active and that this PC's IP is allowed to use it,")
+        print("      pick another proxy, or run with --skip-proxy-check to open anyway.")
+        return 5
     except browser.LaunchError as exc:
         print(f"\nCould not start CloakBrowser:\n{exc}")
         return 3

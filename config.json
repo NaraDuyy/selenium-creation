@@ -1,6 +1,7 @@
 {
   "fingerprint": "random",
   "match_proxy_geo": true,
+  "check_proxy": true,
   "protocol": "http",
 
   "prefer_static": true,
