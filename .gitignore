@@ -14,7 +14,5 @@ logs/
 latest_logs/
 downloaded_files/
 assets/
-chromedriver*
-uc_driver*
 .static_state.json
 bench_results.json

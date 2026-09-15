@@ -1,7 +1,7 @@
-"""Open one brand-new undetected Chrome behind a freshly rotated proxy.
+"""Open one brand-new CloakBrowser behind a freshly rotated proxy.
 
-Every run: hit the proxyxoay.shop API for a new exit IP, spin up Chrome on a
-profile directory that has never existed before, and hand the window over.
+Every run: pick a proxy, spin up CloakBrowser on a profile directory that has
+never existed before with a freshly rolled fingerprint, and hand the window over.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -23,7 +22,8 @@ CONFIG_PATH = ROOT / "config.json"
 KEY_PATH = ROOT / "proxykey.txt"
 
 DEFAULTS = {
-    "engine": "seleniumbase",
+    "fingerprint": "random",
+    "match_proxy_geo": True,
     "protocol": "http",
     "nhamang": "random",
     "tinhthanh": "0",
@@ -73,7 +73,7 @@ def load_key() -> str:
 def parse_args(argv):
     parser = argparse.ArgumentParser(
         prog="run.bat",
-        description="Launch a fresh undetected Chrome on a newly rotated proxy.",
+        description="Launch a fresh CloakBrowser on a newly rotated proxy.",
     )
     parser.add_argument("--url", help="page to open instead of config start_url")
     parser.add_argument("--no-proxy", action="store_true",
@@ -90,10 +90,10 @@ def parse_args(argv):
                         help="use the socks5 endpoint instead of http")
     parser.add_argument("--nhamang", help="carrier override, e.g. fpt / viettel / vnpt")
     parser.add_argument("--tinhthanh", help="province code override, 0 = random")
-    parser.add_argument("--engine", choices=["seleniumbase", "undetected"],
-                        help="which undetected-Chrome engine to drive")
+    parser.add_argument("--fingerprint",
+                        help='"random" (default) or a seed number to reuse an identity')
     parser.add_argument("--keep-profile", action="store_true",
-                        help="do not delete the throwaway Chrome profile on exit")
+                        help="do not delete the throwaway browser profile on exit")
     parser.add_argument("--check", action="store_true",
                         help="print the exit IP the browser is really using, then quit")
     return parser.parse_args(argv)
@@ -157,24 +157,26 @@ def choose_proxy(args, config):
 IP_ECHO = "https://api.ipify.org?format=json"
 
 
-def report_exit_ip(driver) -> None:
+def report_exit_ip(session) -> None:
     """Prove the browser is really behind the proxy, not the local connection."""
     print(f"      checking exit IP via {IP_ECHO}")
     try:
-        driver.get(IP_ECHO)
-        body = driver.find_element("tag name", "body").text.strip()
+        session.page.goto(IP_ECHO, wait_until="domcontentloaded")
+        body = session.page.inner_text("body").strip()
         print(f"      exit IP  {body}")
     except Exception as exc:
         print(f"      could not read the exit IP: {type(exc).__name__}: {exc}")
 
 
-def wait_until_closed(driver) -> None:
+def wait_until_closed(session) -> None:
     """Block while the user drives the browser; return once it is gone."""
     print("\nBrowser is yours. Close the window (or press Ctrl+C) to finish.")
     try:
-        while True:
-            time.sleep(1)
-            _ = driver.window_handles  # raises once Chrome is gone
+        # Playwright only notices closed tabs while it is called into, so wait
+        # on whichever tab is still open rather than sleeping.
+        while session.context.pages:
+            session.context.pages[0].wait_for_timeout(1000)
+        print("\nBrowser window closed.")
     except KeyboardInterrupt:
         print("\nCtrl+C -- shutting down.")
     except Exception:
@@ -185,8 +187,8 @@ def main(argv=None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     config = load_config()
 
-    if args.engine:
-        config["engine"] = args.engine
+    if args.fingerprint:
+        config["fingerprint"] = args.fingerprint
     if args.socks5:
         config["protocol"] = "socks5"
     if args.headless:
@@ -202,7 +204,7 @@ def main(argv=None) -> int:
     start_url = args.url or config["start_url"]
 
     print("=" * 62)
-    print("  selenium-creation  |  fresh undetected Chrome + rotated proxy")
+    print("  selenium-creation  |  fresh CloakBrowser + rotated proxy")
     print("=" * 62)
 
     proxy = None
@@ -218,32 +220,37 @@ def main(argv=None) -> int:
                 print("That looks permanent -- check the key in proxykey.txt.")
             return 2
 
-    print(f"[2/3] Launching undetected Chrome via {config['engine']} ...")
-    driver = None
+    print("[2/3] Launching CloakBrowser ...")
+    session = None
     profile_dir = None
     try:
-        driver, profile_dir = browser.launch(
+        session, profile_dir = browser.launch(
             proxy,
-            engine=config["engine"],
             headless=config["headless"],
             window_size=config["window_size"],
+            fingerprint=config["fingerprint"],
+            match_geo=config["match_proxy_geo"],
         )
-        print(f"      profile {profile_dir.name}")
+        print(f"      profile     {profile_dir.name}")
+        print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")
+        print(f"      identity    {session.identity.describe()}")
+        for note in session.identity.notes:
+            print(f"      note        {note}")
         if args.check:
             print("[3/3] Verifying the connection")
-            report_exit_ip(driver)
+            report_exit_ip(session)
         else:
             print(f"[3/3] Opening {start_url}")
-            browser.open_url(driver, start_url)
+            browser.open_url(session, start_url)
             # Headless has no window for anyone to close, so do not block on it.
             if not config["headless"]:
-                wait_until_closed(driver)
+                wait_until_closed(session)
     except browser.LaunchError as exc:
-        print(f"\nCould not start Chrome:\n{exc}")
+        print(f"\nCould not start CloakBrowser:\n{exc}")
         return 3
     finally:
-        if driver is not None:
-            browser.shutdown(driver)
+        if session is not None:
+            browser.shutdown(session)
         if profile_dir is not None and not config["keep_profile"]:
             browser.discard_profile(profile_dir)
 

@@ -1,5 +1,6 @@
 {
-  "engine": "seleniumbase",
+  "fingerprint": "random",
+  "match_proxy_geo": true,
   "protocol": "http",
 
   "prefer_static": true,

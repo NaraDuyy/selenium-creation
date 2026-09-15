@@ -35,11 +35,16 @@ if exist ".venv\Scripts\python.exe" (
 )
 echo.
 
-echo [3/4] Installing dependencies ^(this pulls SeleniumBase, takes a minute^) ...
+echo [3/4] Installing dependencies ^(CloakBrowser + its ~200 MB browser, takes a minute^) ...
 ".venv\Scripts\python.exe" -m pip install --upgrade pip --quiet
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [X] Dependency install failed. Scroll up for the pip error.
+    goto :fail
+)
+".venv\Scripts\python.exe" -m cloakbrowser install
+if errorlevel 1 (
+    echo [X] Could not download the CloakBrowser binary. Scroll up for the error.
     goto :fail
 )
 echo.

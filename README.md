@@ -1,8 +1,9 @@
 # selenium-creation
 
-Double-click `run.bat` and you get a **brand-new undetected Chrome** behind a
-proxy. Every run builds a Chrome profile that has never existed before — no
-cookies, no history, no fingerprint carried over from the last session.
+Double-click `run.bat` and you get a **brand-new [CloakBrowser](https://github.com/CloakHQ/CloakBrowser)**
+behind a proxy. Every run builds a profile that has never existed before and
+rolls a **new random fingerprint** — no cookies, no history, no identity carried
+over from the last session.
 
 **Static proxies win by default.** If `proxystatic.txt` has entries, one is used.
 Otherwise it falls back to rotating a fresh IP from
@@ -75,8 +76,8 @@ Anything you pass to `run.bat` goes straight to the script:
 | `--socks5` | Use the `proxysocks5` endpoint instead of `proxyhttp` |
 | `--nhamang <c>` | Carrier for this run, e.g. `fpt`, `viettel`, `vnpt`, `random` |
 | `--tinhthanh <n>` | Province code for this run, `0` = random |
-| `--engine <e>` | `seleniumbase` (default) or `undetected` |
-| `--keep-profile` | Don't delete the throwaway Chrome profile on exit |
+| `--fingerprint <n>` | Reuse a fingerprint seed printed by an earlier run instead of rolling a new one |
+| `--keep-profile` | Don't delete the throwaway browser profile on exit |
 
 ```bat
 run.bat --check
@@ -90,7 +91,8 @@ Defaults for every run. Flags win over the file.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `engine` | `seleniumbase` | Which undetected-Chrome engine to drive |
+| `fingerprint` | `random` | `random` rolls a new identity every launch; a number pins one |
+| `match_proxy_geo` | `true` | Set timezone, language and WebRTC IP from the proxy's exit IP |
 | `prefer_static` | `true` | Use `proxystatic.txt` before the rotating API |
 | `static_select` | `first` | Which static proxy to take when several are listed |
 | `protocol` | `http` | `http` or `socks5` — which endpoint to take from the API |
@@ -175,54 +177,54 @@ static is the better tool.
    long instead of guessing.
 
 2. **`src/browser.py`** makes a profile directory under `profiles/` stamped with
-   the time and a random suffix, so no two runs ever share state, and points
-   Chrome at the proxy. The directory is deleted on exit unless you asked to keep it.
+   the time and a random suffix, so no two runs ever share state, rolls a
+   fingerprint seed, and launches CloakBrowser on the proxy. The directory is
+   deleted on exit unless you asked to keep it.
 
 3. **`src/static_proxy.py`** reads `proxystatic.txt` and picks one entry.
 
-4. **`src/proxy_relay.py`** only matters for proxies that need a username and
-   password. Chrome cannot take credentials on `--proxy-server` — it raises a
-   native auth dialog WebDriver cannot reach.
+### The browser
 
-   The usual workaround is an extension answering `onAuthRequired`, and that is
-   what this repo shipped first. **It does not work on Chrome 137+**, which
-   ignores `--load-extension` entirely: the extension never loads, no error is
-   raised, and every page just comes back blank. That was verified here on
-   Chrome 151 — the extension was confirmed absent from `chrome://extensions-internals`.
+[CloakBrowser](https://github.com/CloakHQ/CloakBrowser) is a Chromium build with
+fingerprint patches in its C++ source (canvas, WebGL, audio, GPU, WebRTC,
+automation flags), driven through Playwright. `setup.bat` downloads the binary
+(~535 MB on Windows, signature-verified) into `%USERPROFILE%\.cloakbrowser`.
 
-   So instead of asking Chrome to authenticate, this authenticates *for* it: a
-   tiny relay on `127.0.0.1` injects `Proxy-Authorization` into each connection
-   and pipes the rest upstream. Chrome talks to loopback and never sees a
-   credential, which works on any Chrome version, headless or not.
+**Random every launch.** With `"fingerprint": "random"` a new seed is rolled
+each run and printed. The seed drives CloakBrowser's canvas, audio and GPU
+patches, and also picks CPU cores, memory and screen size from common real-world
+values. The screen always has room for the window plus taskbar and toolbar, so
+with the default `window_size` of `1280,860` only 1680x1050, 1920x1080 and
+2560x1440 are drawn — a smaller window unlocks more screen sizes.
+`run.bat --fingerprint 48213` brings back the same machine.
 
-### Engines
+**Consistent with the proxy.** Before launch, one request through the proxy asks
+where its exit IP is. Timezone, `navigator.languages`/`Accept-Language` and the
+WebRTC IP are then set to match — a Vietnamese exit IP gets `Asia/Bangkok` and
+`vi-VN, vi, en-US, en`. If that lookup fails the browser still launches, on your
+system timezone and language, and says so.
 
-`seleniumbase` (default) is SeleniumBase's UC mode. It is actively maintained and
-matches its driver to whatever Chrome you have — it was verified here against
-Chrome 151.
+**Proxy credentials just work.** HTTP usernames and passwords go through
+Playwright's proxy auth, and CloakBrowser authenticates SOCKS5 natively — so the
+old loopback relay is gone and `--socks5` now works with credentials too.
 
-`undetected` is the original `undetected-chromedriver`. Its last release is from
-2023 and it does not patch cleanly against current Chrome, so it's kept only as a
-fallback. It isn't installed by default:
-
-```bat
-.venv\Scripts\python.exe -m pip install undetected-chromedriver
-```
+**Free tier limits.** Without a key you get Chromium 146 and **one browser at a
+time**. Run `.venv\Scripts\python.exe -m cloakbrowser login` for the latest
+binary (still one session); more concurrent sessions need a paid plan. The
+binary is closed-source and checks its license with cloakbrowser.dev.
 
 ## Notes
 
 - **Whitelist keys are tied to your IP.** If your key uses whitelist auth (no
   user/pass) and your home IP changes, add the new one via `whitelist` in
   `config.json` or the vendor dashboard, or the proxy will refuse you.
-- **SOCKS5 + credentials doesn't work.** Chrome cannot authenticate SOCKS
-  proxies at all, and the relay only speaks HTTP. If your proxy needs
-  credentials, stay on `http`. The script stops with that message rather than
-  silently connecting direct.
+- **One browser at a time on the free tier.** Close the current window before
+  starting another `run.bat`.
 - **`--check` is the honest test.** These are residential gateways: the exit IP
   you get is usually *not* the gateway IP the API handed you. Comparing against
   your own IP is the only way to be sure the proxy is live.
 
 ## Requirements
 
-- Windows, Python 3.9+, Google Chrome
+- Windows, Python 3.9+ (Google Chrome is no longer needed — CloakBrowser ships its own)
 - A proxyxoay.shop key with rotation enabled
