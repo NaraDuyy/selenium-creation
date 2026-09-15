@@ -241,7 +241,13 @@ def main(argv=None) -> int:
             report_exit_ip(session)
         else:
             print(f"[3/3] Opening {start_url}")
-            browser.open_url(session, start_url)
+            try:
+                browser.open_url(session, start_url)
+            except browser.NavigationError as exc:
+                print(f"      {exc}")
+                if config["headless"]:
+                    return 4
+                print("      The browser is still open -- try the page again or go elsewhere.")
             # Headless has no window for anyone to close, so do not block on it.
             if not config["headless"]:
                 wait_until_closed(session)

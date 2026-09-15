@@ -46,6 +46,10 @@ class LaunchError(RuntimeError):
     pass
 
 
+class NavigationError(RuntimeError):
+    """The browser is up, but the page would not load."""
+
+
 @dataclass
 class Identity:
     """Everything the page can see about who this browser is."""
@@ -252,5 +256,16 @@ def shutdown(session: Session) -> None:
         pass
 
 
-def open_url(session: Session, url: str) -> None:
-    session.page.goto(url, wait_until="domcontentloaded")
+def open_url(session: Session, url: str, attempts: int = 2) -> None:
+    """Navigate, retrying once: residential proxies and sites drop the odd connection."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    for attempt in range(1, attempts + 1):
+        try:
+            session.page.goto(url, wait_until="domcontentloaded")
+            return
+        except PlaywrightError as exc:
+            reason = str(exc).splitlines()[0]
+            if attempt == attempts:
+                raise NavigationError(f"could not open {url}: {reason}") from exc
+            print(f"      attempt {attempt} failed ({reason}), retrying ...")
