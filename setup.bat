@@ -7,15 +7,23 @@ echo   selenium-creation  ^|  one-time setup
 echo ==============================================================
 echo.
 
+rem Ask each candidate to print something. Windows ships a "python.exe" stub
+rem that only advertises the Microsoft Store, so a name on PATH proves nothing.
 set "PY="
-where py >nul 2>&1 && set "PY=py -3"
+call :try_python "py -3"
+call :try_python "python"
+call :try_python "python3"
 if not defined PY (
-    where python >nul 2>&1 && set "PY=python"
-)
-if not defined PY (
-    echo [X] Python was not found on this machine.
-    echo     Install it from https://www.python.org/downloads/windows/
+    echo [X] No working Python on this machine.
+    echo     Windows may list python.exe without installing it - that stub only
+    echo     opens the Microsoft Store.
+    echo.
+    echo     Install Python 3.9 or newer from
+    echo       https://www.python.org/downloads/windows/
     echo     and tick "Add python.exe to PATH", then run setup.bat again.
+    echo.
+    echo     If it still fails, turn off the stub in
+    echo       Settings ^> Apps ^> Advanced app settings ^> App execution aliases
     goto :fail
 )
 
@@ -73,6 +81,13 @@ echo ==============================================================
 echo.
 pause
 exit /b 0
+
+:try_python
+if defined PY goto :eof
+for /f "delims=" %%v in ('%~1 -c "print(42)" 2^>nul') do (
+    if "%%v"=="42" set "PY=%~1"
+)
+goto :eof
 
 :fail
 echo.
