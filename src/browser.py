@@ -34,6 +34,8 @@ COUNTRY_LOCALE = {
     "NL": "nl-NL", "PL": "pl-PL", "RU": "ru-RU", "BR": "pt-BR", "MX": "es-MX",
 }
 
+GOOGLE_SEARCH = ("Google", "google.com", "https://www.google.com/search?q=%s")
+
 GEO_LOOKUPS = (
     # (url, ip key, country key, timezone key)
     ("http://ip-api.com/json/?fields=status,query,countryCode,timezone",
@@ -228,6 +230,38 @@ def build_identity(seed: int, proxy: Proxy | None, window: tuple[int, int],
     return identity
 
 
+def set_google_search(page, timeout_ms: int = 5000) -> None:
+    """Make Google the search engine the address bar uses.
+
+    CloakBrowser ships with "No Search", so a word typed in the address bar is
+    opened as http://word/ and the proxy answers 503. Google is not in its list
+    either, so it is added the way a user would, through the search settings
+    page -- which no website can see. Raises if that page has changed shape.
+    """
+    name, keyword, url = GOOGLE_SEARCH
+    page.goto("chrome://settings/searchEngines")
+    page.locator("#addSearchEngine").click(timeout=timeout_ms)
+    page.locator("cr-input#searchEngine input").fill(name, timeout=timeout_ms)
+    page.locator("cr-input#keyword input").fill(keyword, timeout=timeout_ms)
+    page.locator("cr-input#queryUrl input").fill(url, timeout=timeout_ms)
+    page.locator("cr-button#actionButton").click(timeout=timeout_ms)
+    # Find the row by its shortcut and use element ids, never button labels:
+    # the settings page follows the browser language, which tracks the proxy.
+    entry = page.locator("settings-search-engine-entry").filter(has_text=keyword)
+    entry.locator("cr-icon-button:not(#editIconButton)").click(timeout=timeout_ms)
+    entry.locator("button#makeDefault").click(timeout=timeout_ms)
+
+    default = page.evaluate("""async () => {
+        const cr = await import('chrome://resources/js/cr.js');
+        const list = await cr.sendWithPromise('getSearchEnginesList');
+        const engine = [...(list.defaults || []), ...(list.actives || []), ...(list.others || [])]
+            .find(e => e.default);
+        return engine ? engine.name : null;
+    }""")
+    if default != name:
+        raise RuntimeError(f"default search engine is still {default!r}")
+
+
 def _proxy_settings(proxy: Proxy | None) -> dict | None:
     """Hand the proxy to CloakBrowser with its credentials in separate fields.
 
@@ -256,7 +290,7 @@ def _parse_window_size(window_size: str) -> tuple[int, int]:
 
 def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
            window_size="1280,860", fingerprint="random", match_geo=True,
-           check_proxy=True):
+           check_proxy=True, google_search=True):
     """Return a live Session on a fresh profile, routed through ``proxy``.
 
     With ``check_proxy`` a proxy that carries no traffic raises ProxyUnreachable
@@ -289,6 +323,22 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
         raise LaunchError(f"CloakBrowser refused the license: {exc}") from exc
 
     page = context.pages[0] if context.pages else context.new_page()
+    if google_search:
+        from playwright.sync_api import Error as PlaywrightError
+
+        try:
+            set_google_search(page)
+        except (PlaywrightError, RuntimeError) as exc:
+            # A browser without address-bar search is still worth handing over.
+            reason = str(exc).splitlines()[0]
+            identity.notes.append(
+                f"could not set Google as the search engine ({reason}) -- "
+                "type full addresses in the address bar"
+            )
+        try:
+            page.goto("about:blank")
+        except PlaywrightError:
+            pass
     return Session(context=context, page=page, identity=identity), profile_dir
 
 

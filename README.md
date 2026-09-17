@@ -95,6 +95,7 @@ Defaults for every run. Flags win over the file.
 | `fingerprint` | `random` | `random` rolls a new identity every launch; a number pins one |
 | `match_proxy_geo` | `true` | Set timezone, language and WebRTC IP from the proxy's exit IP |
 | `check_proxy` | `true` | Stop before opening a browser if the proxy carries no traffic |
+| `google_search` | `true` | Make Google the address bar's search engine at launch |
 | `prefer_static` | `true` | Use `proxystatic.txt` before the rotating API |
 | `static_select` | `first` | Which static proxy to take when several are listed |
 | `protocol` | `http` | `http` or `socks5` — which endpoint to take from the API |
@@ -209,6 +210,13 @@ system timezone and language, and says so.
 **Proxy credentials just work.** HTTP usernames and passwords go through
 Playwright's proxy auth, and CloakBrowser authenticates SOCKS5 natively — so the
 old loopback relay is gone and `--socks5` now works with credentials too.
+
+**Address-bar search.** CloakBrowser ships with its search engine set to
+"No Search", so typing a word like `hello` opens `http://hello/` and the proxy
+answers `HTTP ERROR 503`. With `google_search` on, each launch adds Google on
+the browser's own search settings page and makes it the default (~2 s, not
+visible to websites). If a future CloakBrowser changes that page, the launch
+carries on with a note instead of failing.
 
 **Free tier limits.** Without a key you get Chromium 146 and **one browser at a
 time**. Run `.venv\Scripts\python.exe -m cloakbrowser login` for the latest

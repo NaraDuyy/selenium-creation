@@ -25,6 +25,7 @@ DEFAULTS = {
     "fingerprint": "random",
     "match_proxy_geo": True,
     "check_proxy": True,
+    "google_search": True,
     "protocol": "http",
     "nhamang": "random",
     "tinhthanh": "0",
@@ -236,6 +237,7 @@ def main(argv=None) -> int:
             fingerprint=config["fingerprint"],
             match_geo=config["match_proxy_geo"],
             check_proxy=config["check_proxy"],
+            google_search=config["google_search"],
         )
         print(f"      profile     {profile_dir.name}")
         print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")

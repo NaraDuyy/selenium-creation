@@ -2,6 +2,7 @@
   "fingerprint": "random",
   "match_proxy_geo": true,
   "check_proxy": true,
+  "google_search": true,
   "protocol": "http",
 
   "prefer_static": true,
