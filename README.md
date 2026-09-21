@@ -60,6 +60,26 @@ xIqD................Tlgg
 `proxykey.txt` is **gitignored** — the key never leaves your machine. Lines
 starting with `#` are ignored, so you can keep a note next to it.
 
+## CloakBrowser key (optional)
+
+Without a key you get the free Chromium 146 build. A free key from
+[cloakbrowser.dev/free](https://cloakbrowser.dev/free) (GitHub sign-in) unlocks
+the newest build, Chromium 151, limited to one open browser at a time.
+
+Paste it into `.env` in the project folder:
+
+```
+CLOAKBROWSER_LICENSE_KEY=cb_xxxxxxxx
+```
+
+`run.bat` loads it and prints `CloakBrowser key loaded from .env`. The next
+launch downloads the 151 build once (~500 MB). `.env` is **gitignored**, so the
+key never leaves the PC; `.env.example` is the template that is committed.
+
+A `CLOAKBROWSER_LICENSE_KEY` already set in Windows takes priority over `.env`.
+Either one beats a key saved by `cloakbrowser login`
+(`%USERPROFILE%\.cloakbrowser\license.key`), which is only used when neither is set.
+
 ## Flags
 
 Anything you pass to `run.bat` goes straight to the script:
@@ -96,6 +116,7 @@ Defaults for every run. Flags win over the file.
 | `match_proxy_geo` | `true` | Set timezone, language and WebRTC IP from the proxy's exit IP |
 | `check_proxy` | `true` | Stop before opening a browser if the proxy carries no traffic |
 | `google_search` | `true` | Make Google the address bar's search engine at launch |
+| `storage_quota_mb` | `10240` | Storage space reported to sites, in MB; `0` keeps CloakBrowser's ~0.5 GB, which reads as incognito |
 | `prefer_static` | `true` | Use `proxystatic.txt` before the rotating API |
 | `static_select` | `first` | Which static proxy to take when several are listed |
 | `protocol` | `http` | `http` or `socks5` — which endpoint to take from the API |

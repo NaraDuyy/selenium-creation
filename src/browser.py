@@ -36,6 +36,11 @@ COUNTRY_LOCALE = {
 
 GOOGLE_SEARCH = ("Google", "google.com", "https://www.google.com/search?q=%s")
 
+# What a stock Chrome reports from navigator.storage.estimate() -- measured at
+# exactly 10 GiB on a real Chrome 152. CloakBrowser's own default is ~0.5 GB,
+# which BrowserScan and Pixelscan read as an incognito window.
+STORAGE_QUOTA_MB = 10240
+
 GEO_LOOKUPS = (
     # (url, ip key, country key, timezone key)
     ("http://ip-api.com/json/?fields=status,query,countryCode,timezone",
@@ -290,7 +295,7 @@ def _parse_window_size(window_size: str) -> tuple[int, int]:
 
 def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
            window_size="1280,860", fingerprint="random", match_geo=True,
-           check_proxy=True, google_search=True):
+           check_proxy=True, google_search=True, storage_quota_mb=STORAGE_QUOTA_MB):
     """Return a live Session on a fresh profile, routed through ``proxy``.
 
     With ``check_proxy`` a proxy that carries no traffic raises ProxyUnreachable
@@ -309,6 +314,9 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
     # Headed: no viewport emulation, so the page tracks the real window and
     # outerWidth >= innerWidth stays coherent. Headless has no window to track.
     viewport = {"width": width, "height": height} if headless else None
+    extra_args = [f"--window-size={width},{height}"]
+    if storage_quota_mb:
+        extra_args.append(f"--fingerprint-storage-quota={int(storage_quota_mb)}")
 
     try:
         context = launch_persistent_context(
@@ -316,7 +324,7 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
             headless=bool(headless),
             proxy=_proxy_settings(proxy),
             # Our seed overrides CloakBrowser's own per-launch one so we can print it.
-            args=identity.args() + [f"--window-size={width},{height}"],
+            args=identity.args() + extra_args,
             viewport=viewport,
         )
     except CloakBrowserLicenseError as exc:

@@ -2,6 +2,7 @@
 proxykey.txt
 proxystatic.txt
 staticproxy.txt
+.env
 
 # Python
 .venv/

@@ -3,6 +3,7 @@
   "match_proxy_geo": true,
   "check_proxy": true,
   "google_search": true,
+  "storage_quota_mb": 10240,
   "protocol": "http",
 
   "prefer_static": true,

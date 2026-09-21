@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -20,12 +21,14 @@ import static_proxy
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.json"
 KEY_PATH = ROOT / "proxykey.txt"
+ENV_PATH = ROOT / ".env"
 
 DEFAULTS = {
     "fingerprint": "random",
     "match_proxy_geo": True,
     "check_proxy": True,
     "google_search": True,
+    "storage_quota_mb": 10240,
     "protocol": "http",
     "nhamang": "random",
     "tinhthanh": "0",
@@ -51,6 +54,28 @@ def load_config() -> dict:
         except json.JSONDecodeError as exc:
             raise SystemExit(f"config.json is not valid JSON: {exc}")
     return config
+
+
+def load_env() -> list[str]:
+    """Copy KEY=value lines from .env into the environment. Returns names set.
+
+    A variable already set in Windows wins, and empty values are skipped, so an
+    untouched .env changes nothing. CloakBrowser reads its license key from
+    CLOAKBROWSER_LICENSE_KEY, so a key pasted here is picked up automatically.
+    """
+    if not ENV_PATH.exists():
+        return []
+    loaded = []
+    for raw in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip(), value.strip().strip('"').strip("'")
+        if value and name not in os.environ:
+            os.environ[name] = value
+            loaded.append(name)
+    return loaded
 
 
 def load_key() -> str:
@@ -189,6 +214,7 @@ def wait_until_closed(session) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    env_loaded = load_env()
     config = load_config()
 
     if args.fingerprint:
@@ -212,6 +238,8 @@ def main(argv=None) -> int:
     print("=" * 62)
     print("  selenium-creation  |  fresh CloakBrowser + rotated proxy")
     print("=" * 62)
+    if "CLOAKBROWSER_LICENSE_KEY" in env_loaded:
+        print("      CloakBrowser key loaded from .env")
 
     proxy = None
     if args.no_proxy:
@@ -238,6 +266,7 @@ def main(argv=None) -> int:
             match_geo=config["match_proxy_geo"],
             check_proxy=config["check_proxy"],
             google_search=config["google_search"],
+            storage_quota_mb=config["storage_quota_mb"],
         )
         print(f"      profile     {profile_dir.name}")
         print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")
