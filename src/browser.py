@@ -295,7 +295,8 @@ def _parse_window_size(window_size: str) -> tuple[int, int]:
 
 def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
            window_size="1280,860", fingerprint="random", match_geo=True,
-           check_proxy=True, google_search=True, storage_quota_mb=STORAGE_QUOTA_MB):
+           check_proxy=True, google_search=True, storage_quota_mb=STORAGE_QUOTA_MB,
+           language="en-US"):
     """Return a live Session on a fresh profile, routed through ``proxy``.
 
     With ``check_proxy`` a proxy that carries no traffic raises ProxyUnreachable
@@ -310,6 +311,11 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
     width, height = _parse_window_size(window_size)
     identity = build_identity(pick_seed(fingerprint), proxy, (width, height),
                               match_geo, check_proxy)
+    # An explicit language wins over the proxy's country, with or without a
+    # proxy. Timezone still follows the proxy: that is what must match the IP,
+    # while an English browser in Vietnam is an everyday combination.
+    if language and str(language).strip().lower() != "auto":
+        identity.locale = str(language).strip()
 
     # Headed: no viewport emulation, so the page tracks the real window and
     # outerWidth >= innerWidth stays coherent. Headless has no window to track.

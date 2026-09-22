@@ -4,6 +4,7 @@
   "check_proxy": true,
   "google_search": true,
   "storage_quota_mb": 10240,
+  "language": "en-US",
   "protocol": "http",
 
   "prefer_static": true,

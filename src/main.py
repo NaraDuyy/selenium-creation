@@ -29,6 +29,7 @@ DEFAULTS = {
     "check_proxy": True,
     "google_search": True,
     "storage_quota_mb": 10240,
+    "language": "en-US",
     "protocol": "http",
     "nhamang": "random",
     "tinhthanh": "0",
@@ -117,6 +118,8 @@ def parse_args(argv):
                         help="use the socks5 endpoint instead of http")
     parser.add_argument("--nhamang", help="carrier override, e.g. fpt / viettel / vnpt")
     parser.add_argument("--tinhthanh", help="province code override, 0 = random")
+    parser.add_argument("--language",
+                        help='browser language, e.g. en-US or vi-VN; "auto" follows the proxy')
     parser.add_argument("--fingerprint",
                         help='"random" (default) or a seed number to reuse an identity')
     parser.add_argument("--skip-proxy-check", action="store_true",
@@ -217,6 +220,8 @@ def main(argv=None) -> int:
     env_loaded = load_env()
     config = load_config()
 
+    if args.language:
+        config["language"] = args.language
     if args.fingerprint:
         config["fingerprint"] = args.fingerprint
     if args.skip_proxy_check:
@@ -267,6 +272,7 @@ def main(argv=None) -> int:
             check_proxy=config["check_proxy"],
             google_search=config["google_search"],
             storage_quota_mb=config["storage_quota_mb"],
+            language=config["language"],
         )
         print(f"      profile     {profile_dir.name}")
         print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")

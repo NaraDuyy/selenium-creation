@@ -96,6 +96,7 @@ Anything you pass to `run.bat` goes straight to the script:
 | `--socks5` | Use the `proxysocks5` endpoint instead of `proxyhttp` |
 | `--nhamang <c>` | Carrier for this run, e.g. `fpt`, `viettel`, `vnpt`, `random` |
 | `--tinhthanh <n>` | Province code for this run, `0` = random |
+| `--language <l>` | Browser language for this run, e.g. `en-US`, `vi-VN`, or `auto` to follow the proxy |
 | `--fingerprint <n>` | Reuse a fingerprint seed printed by an earlier run instead of rolling a new one |
 | `--skip-proxy-check` | Open the browser even when the proxy check says the proxy carries no traffic |
 | `--keep-profile` | Don't delete the throwaway browser profile on exit |
@@ -116,6 +117,7 @@ Defaults for every run. Flags win over the file.
 | `match_proxy_geo` | `true` | Set timezone, language and WebRTC IP from the proxy's exit IP |
 | `check_proxy` | `true` | Stop before opening a browser if the proxy carries no traffic |
 | `google_search` | `true` | Make Google the address bar's search engine at launch |
+| `language` | `en-US` | Browser language: menus, `navigator.languages`, `Accept-Language`. `auto` follows the proxy's country |
 | `storage_quota_mb` | `10240` | Storage space reported to sites, in MB; `0` keeps CloakBrowser's ~0.5 GB, which reads as incognito |
 | `prefer_static` | `true` | Use `proxystatic.txt` before the rotating API |
 | `static_select` | `first` | Which static proxy to take when several are listed |
@@ -225,7 +227,7 @@ with the default `window_size` of `1280,860` only 1680x1050, 1920x1080 and
 **Consistent with the proxy.** Before launch, one request through the proxy asks
 where its exit IP is. Timezone, `navigator.languages`/`Accept-Language` and the
 WebRTC IP are then set to match — a Vietnamese exit IP gets `Asia/Bangkok` and
-`vi-VN, vi, en-US, en`. If that lookup fails the browser still launches, on your
+`vi-VN, vi, en-US, en` when `language` is `auto` (the default is `en-US`). If that lookup fails the browser still launches, on your
 system timezone and language, and says so.
 
 **Proxy credentials just work.** HTTP usernames and passwords go through
