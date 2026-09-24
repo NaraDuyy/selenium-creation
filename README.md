@@ -111,12 +111,27 @@ canvas, audio and fonts; threads, screen, window, language, storage size and
 **timezone** are read back. `--fingerprint` and `--language` are ignored for an
 existing profile, and say so.
 
-**Proxies.** A profile does not store a proxy -- pick one each run as usual.
-The profile remembers its **home country** from the first proxied launch and
-prints a `WARNING` when a later proxy is somewhere else. The timezone stays
-where it was (a real PC's clock does not move); if a new proxy is in another
-timezone you get a note. In one-timezone countries like Vietnam this never
-comes up; in Russia or the US, pick proxies in the same region.
+**Proxies.** A profile does not store a proxy -- proxies are bought daily, so
+yesterday's would be dead. Instead it remembers its **home**: the country, ISP
+(by network number, e.g. `AS7552` Viettel, `AS45899` VNPT) and province of the
+first proxy it was opened through. On every later launch each proxy in
+`proxystatic.txt` is looked up in parallel, and:
+
+- proxies that carry no traffic are skipped;
+- proxies in **another country are refused** -- if none is left in the home
+  country, `run.bat` does not open the browser at all (exit code 7) and says
+  which countries it did find. `--allow-other-country` overrides this;
+- of the rest, the closest to home wins: same ISP and province, then same ISP,
+  then same province. If even the best one is on a **different ISP or
+  province**, `run.bat` shows a `WARNING` and asks `Open anyway? [y/N]` --
+  Enter or anything but `y` cancels without opening a browser (exit code 8).
+  `--yes` accepts without asking; with no console to answer, it counts as no.
+
+A new IP from the same ISP in the same province each day looks like an
+ordinary home connection being reassigned. The timezone stays where it was (a
+real PC's clock does not move); in one-timezone countries like Vietnam that
+never matters. `--no-proxy` with a profile is refused too when this PC's own
+connection is outside the home country.
 
 **Memory** is always this PC's real value, so opening a profile on a PC with a
 different amount of RAM prints a note. **Portable cookies** can only be chosen
@@ -148,7 +163,9 @@ Anything you pass to `run.bat` goes straight to the script:
 | `--skip-proxy-check` | Open the browser even when the proxy check says the proxy carries no traffic |
 | `--profile <name>` | Open a saved profile, creating it on first use |
 | `--profiles` | List saved profiles |
-| `--delete-profile <name>` | Delete a saved profile (asks first; add `--yes` to skip) |
+| `--delete-profile <name>` | Delete a saved profile (asks first) |
+| `--yes` | Answer yes to every question: deleting, or a proxy on a different ISP/province |
+| `--allow-other-country` | Open a profile through a proxy outside its home country |
 | `--portable` | With a new profile: keep its logins working if copied to another PC |
 | `--keep-profile` | Don't delete the throwaway browser profile on exit |
 

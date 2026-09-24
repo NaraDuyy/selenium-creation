@@ -48,11 +48,49 @@ GOOGLE_SEARCH = ("Google", "google.com", "https://www.google.com/search?q=%s")
 # which BrowserScan and Pixelscan read as an incognito window.
 STORAGE_QUOTA_MB = 10240
 
+@dataclass
+class ProxyInfo:
+    """Where a proxy's exit IP is, and whose network it belongs to."""
+
+    ip: str
+    country: str
+    timezone: str
+    region: str = ""
+    city: str = ""
+    isp: str = ""
+    asn: str = ""  # e.g. "AS7552" -- steadier than the ISP's spelling
+
+    def place(self) -> str:
+        return ", ".join(part for part in (self.city, self.region, self.country) if part)
+
+    def network(self) -> str:
+        return f"{self.isp} ({self.asn})" if self.asn else (self.isp or "unknown ISP")
+
+
+def _from_ip_api(data: dict) -> ProxyInfo | None:
+    if not (data.get("query") and data.get("timezone")):
+        return None
+    asn = (data.get("as") or "").split(" ")[0]
+    return ProxyInfo(ip=data["query"], country=data.get("countryCode") or "",
+                     timezone=data["timezone"], region=data.get("regionName") or "",
+                     city=data.get("city") or "", isp=data.get("isp") or "",
+                     asn=asn if asn.startswith("AS") else "")
+
+
+def _from_ipinfo(data: dict) -> ProxyInfo | None:
+    if not (data.get("ip") and data.get("timezone")):
+        return None
+    asn, _, name = (data.get("org") or "").partition(" ")
+    return ProxyInfo(ip=data["ip"], country=data.get("country") or "",
+                     timezone=data["timezone"], region=data.get("region") or "",
+                     city=data.get("city") or "", isp=name,
+                     asn=asn if asn.startswith("AS") else "")
+
+
 GEO_LOOKUPS = (
-    # (url, ip key, country key, timezone key)
-    ("http://ip-api.com/json/?fields=status,query,countryCode,timezone",
-     "query", "countryCode", "timezone"),
-    ("https://ipinfo.io/json", "ip", "country", "timezone"),
+    ("http://ip-api.com/json/?fields=status,query,countryCode,regionName,city,isp,as,timezone",
+     _from_ip_api),
+    ("https://ipinfo.io/json", _from_ipinfo),
 )
 
 
@@ -80,6 +118,9 @@ class Identity:
     country: str | None = None
     timezone: str | None = None
     locale: str | None = None
+    region: str | None = None
+    isp: str | None = None
+    asn: str | None = None
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -115,7 +156,8 @@ class Identity:
         bits.append(self.locale or "system language")
         bits.append(self.timezone or "system timezone")
         if self.exit_ip:
-            bits.append(f"exit {self.exit_ip} ({self.country})")
+            network = f", {self.isp}" if self.isp else ""
+            bits.append(f"exit {self.exit_ip} ({self.country}{network})")
         return ", ".join(bits)
 
 
@@ -225,7 +267,13 @@ def _describe_error(exc: Exception) -> str:
 
 
 def lookup_geo(proxy: Proxy, timeout: float = 10) -> tuple[str, str, str]:
-    """Ask, through the proxy, where its exit IP is. Returns (ip, country, timezone).
+    """(ip, country, timezone) of the proxy's exit. See lookup_proxy."""
+    info = lookup_proxy(proxy, timeout)
+    return info.ip, info.country, info.timezone
+
+
+def lookup_proxy(proxy: Proxy | None, timeout: float = 10) -> ProxyInfo:
+    """Ask, through the proxy (or directly for None), where its exit IP is.
 
     Raises ProxyUnreachable when no lookup got any HTTP answer at all -- the
     proxy itself is broken -- and plain LaunchError when answers came back but
@@ -235,9 +283,9 @@ def lookup_geo(proxy: Proxy, timeout: float = 10) -> tuple[str, str, str]:
 
     errors = []
     answered = False
-    for url, ip_key, country_key, tz_key in GEO_LOOKUPS:
+    for url, parse in GEO_LOOKUPS:
         try:
-            response = httpx.get(url, proxy=_proxy_url(proxy), timeout=timeout)
+            response = httpx.get(url, proxy=_proxy_url(proxy) if proxy else None, timeout=timeout)
         except httpx.TransportError as exc:
             errors.append(f"{url}: {_describe_error(exc)}")
             continue
@@ -251,37 +299,44 @@ def lookup_geo(proxy: Proxy, timeout: float = 10) -> tuple[str, str, str]:
             data = response.json()
         except ValueError:
             data = {}
-        if data.get(ip_key) and data.get(tz_key):
-            return data[ip_key], data.get(country_key) or "", data[tz_key]
+        info = parse(data)
+        if info is not None:
+            return info
         errors.append(f"{url}: HTTP {response.status_code} without a location")
 
     detail = "; ".join(errors)
     if not answered:
-        raise ProxyUnreachable(f"{proxy.describe()} carried no traffic ({detail})")
+        where = proxy.describe() if proxy else "this PC's own connection"
+        raise ProxyUnreachable(f"{where} carried no traffic ({detail})")
     raise LaunchError(f"could not locate the proxy exit IP ({detail})")
 
 
 def build_identity(seed: int, proxy: Proxy | None, window: tuple[int, int],
-                   match_geo: bool, check_proxy: bool = True) -> Identity:
+                   match_geo: bool, check_proxy: bool = True,
+                   geo: ProxyInfo | None = None) -> Identity:
+    """``geo`` is a lookup already made while choosing the proxy; reusing it
+    means no second request, and no chance of a rotating exit moving between."""
     cores, memory_gb, screen = roll_hardware(seed, window)
     identity = Identity(seed=seed, cores=cores, memory_gb=memory_gb, screen=screen)
     if proxy is None or not (match_geo or check_proxy):
         return identity
-    try:
-        exit_ip, country, timezone = lookup_geo(proxy)
-    except ProxyUnreachable as exc:
-        if check_proxy:
-            raise
-        identity.notes.append(f"{exc} -- launching anyway because check_proxy is off")
-        return identity
-    except LaunchError as exc:
-        # Launching anyway is still useful; the page just sees this PC's timezone.
-        identity.notes.append(f"{exc} -- timezone/language left at system defaults")
-        return identity
+    if geo is None:
+        try:
+            geo = lookup_proxy(proxy)
+        except ProxyUnreachable as exc:
+            if check_proxy:
+                raise
+            identity.notes.append(f"{exc} -- launching anyway because check_proxy is off")
+            return identity
+        except LaunchError as exc:
+            # Launching anyway is still useful; the page just sees this PC's timezone.
+            identity.notes.append(f"{exc} -- timezone/language left at system defaults")
+            return identity
     if not match_geo:
         return identity
-    identity.exit_ip, identity.country, identity.timezone = exit_ip, country, timezone
-    identity.locale = COUNTRY_LOCALE.get(country.upper(), "en-US")
+    identity.exit_ip, identity.country, identity.timezone = geo.ip, geo.country, geo.timezone
+    identity.region, identity.isp, identity.asn = geo.region, geo.isp, geo.asn
+    identity.locale = COUNTRY_LOCALE.get(geo.country.upper(), "en-US")
     return identity
 
 
@@ -353,7 +408,7 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
            window_size="1280,860", fingerprint="random", match_geo=True,
            check_proxy=True, google_search=True, storage_quota_mb=STORAGE_QUOTA_MB,
            language="en-US", pinned=None, cache_mb=None, portable_cookies=False,
-           downloads_dir=None):
+           downloads_dir=None, geo=None):
     """Return a live Session on a fresh profile, routed through ``proxy``.
 
     ``pinned`` holds a saved profile's cores, screen and timezone so the same
@@ -371,7 +426,7 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
     profile_dir = Path(profile_dir) if profile_dir else new_profile_dir()
     width, height = _parse_window_size(window_size)
     identity = build_identity(pick_seed(fingerprint), proxy, (width, height),
-                              match_geo, check_proxy)
+                              match_geo, check_proxy, geo=geo)
     # An explicit language wins over the proxy's country, with or without a
     # proxy. Timezone still follows the proxy: that is what must match the IP,
     # while an English browser in Vietnam is an everyday combination.

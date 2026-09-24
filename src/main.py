@@ -133,7 +133,10 @@ def parse_args(argv):
     parser.add_argument("--delete-profile", metavar="NAME", help="delete a saved profile and exit")
     parser.add_argument("--portable", action="store_true",
                         help="new profile only: keep its logins working if copied to another PC")
-    parser.add_argument("--yes", action="store_true", help="do not ask before deleting")
+    parser.add_argument("--yes", action="store_true",
+                        help="answer yes to every question (deleting, a proxy on a different ISP/province)")
+    parser.add_argument("--allow-other-country", action="store_true",
+                        help="open a profile even through a proxy outside its home country")
     parser.add_argument("--check", action="store_true",
                         help="print the exit IP the browser is really using, then quit")
     return parser.parse_args(argv)
@@ -192,6 +195,98 @@ def choose_proxy(args, config):
         print("      no static proxies listed -- falling back to rotation")
 
     return obtain_rotating(config, load_key())
+
+
+def _check_all(listed):
+    """Look up every listed proxy at once. Returns [(proxy, ProxyInfo or error)]."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(proxy):
+        try:
+            return proxy, browser.lookup_proxy(proxy)
+        except browser.LaunchError as exc:
+            return proxy, exc
+
+    with ThreadPoolExecutor(max_workers=min(8, len(listed))) as pool:
+        return list(pool.map(one, listed))
+
+
+def confirm(question: str, assume_yes: bool) -> bool:
+    """Ask y/N. No answer possible (no console) counts as no."""
+    if assume_yes:
+        return True
+    try:
+        return input(f"      {question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        print("\n      (no one to answer -- treated as no; add --yes to accept automatically)")
+        return False
+
+
+def _pick_for_profile(listed, data, config, allow_other, assume_yes=False):
+    """The listed proxy most like this profile's usual connection."""
+    print(f"      checking {len(listed)} listed prox{'y' if len(listed) == 1 else 'ies'} for this profile ...")
+    alive = [(p, info) for p, info in _check_all(listed) if isinstance(info, browser.ProxyInfo)]
+    dead = len(listed) - len(alive)
+    if dead:
+        print(f"      skipped {dead} that carried no traffic")
+    if not alive:
+        raise browser.ProxyUnreachable(f"none of the {len(listed)} listed proxies carried traffic")
+
+    home = data.get("home_country")
+    pool = alive
+    if home:
+        same = [(p, i) for p, i in alive if i.country == home]
+        if same:
+            pool = same
+        elif not allow_other:
+            found = sorted({i.country or "?" for _, i in alive})
+            raise profiles.CountryMismatch(
+                f"This profile's home is {home}, but the working proxies are in: {', '.join(found)}.\n"
+                f"      Not opening -- one account showing up from another country is the kind of\n"
+                f"      jump that gets it challenged or locked. Add a {home} proxy to proxystatic.txt,\n"
+                f"      or run with --allow-other-country if you really mean it."
+            )
+        else:
+            print(f"      WARNING     no {home} proxy works -- opening through another country "
+                  "because of --allow-other-country")
+
+    scored = [(profiles.match(data, i)[0], p, i) for p, i in pool]
+    best = max(s for s, _, _ in scored)
+    top = [p for s, p, _ in scored if s == best]
+    chosen = static_proxy.select(top, config["static_select"])
+    info = next(i for p, i in pool if p is chosen)
+    _, diffs = profiles.match(data, info)
+    print(f"      using {chosen.describe()}")
+    print(f"      exit  {info.ip}  {info.place()}  {info.network()}")
+    if home and (data.get("home_asn") or data.get("home_region")) and not diffs:
+        print("      match same ISP and province as this profile's usual connection")
+    if diffs:
+        print("      WARNING     this proxy differs from the profile's usual connection:")
+        for diff in diffs:
+            print(f"                  {diff}")
+        if not confirm("Open anyway?", assume_yes):
+            raise profiles.NotConfirmed(
+                "Not opened. Add a proxy on the profile's usual ISP and province to "
+                "proxystatic.txt, or answer y (or pass --yes) to accept this one.")
+    return chosen, info
+
+
+def choose_proxy_for_profile(args, config, data, allow_other, assume_yes=False):
+    """Like choose_proxy, but checked against where the profile normally lives."""
+    want_static = (config["prefer_static"] and not args.rotate) or args.static
+    if want_static:
+        try:
+            listed = static_proxy.load(config["protocol"])
+        except static_proxy.StaticProxyError as exc:
+            print(f"      static proxy list problem: {exc}")
+            listed = []
+        if listed:
+            return _pick_for_profile(listed, data, config, allow_other, assume_yes)
+        if args.static:
+            raise SystemExit("--static was requested but proxystatic.txt has no usable entries.")
+        print("      no static proxies listed -- falling back to rotation")
+    proxy = obtain_rotating(config, load_key())
+    return _pick_for_profile([proxy], data, config, allow_other, assume_yes)
 
 
 IP_ECHO = "https://api.ipify.org?format=json"
@@ -295,18 +390,50 @@ def main(argv=None) -> int:
     if "CLOAKBROWSER_LICENSE_KEY" in env_loaded:
         print("      CloakBrowser key loaded from .env")
 
-    proxy = None
-    if args.no_proxy:
-        print("[1/3] Proxy skipped (--no-proxy): using a direct connection.")
-    else:
-        print("[1/3] Picking a proxy ...")
+    profile_data = None
+    if args.profile:
         try:
-            proxy = choose_proxy(args, config)
-        except proxy_client.ProxyApiError as exc:
-            print(f"\nProxy API refused: {exc.message} (status {exc.status})")
-            if exc.fatal:
-                print("That looks permanent -- check the key in proxykey.txt.")
-            return 2
+            profile_data = profiles.open_profile(args.profile).data
+        except profiles.ProfileError as exc:
+            print(f"\n{exc}")
+            return 6
+
+    proxy = None
+    geo = None
+    try:
+        if args.no_proxy:
+            print("[1/3] Proxy skipped (--no-proxy): using a direct connection.")
+            home = (profile_data or {}).get("home_country")
+            if home and not args.allow_other_country:
+                try:
+                    direct = browser.lookup_proxy(None)
+                except browser.LaunchError:
+                    direct = None
+                if direct and direct.country and direct.country != home:
+                    raise profiles.CountryMismatch(
+                        f"This profile's home is {home}, but this PC's own connection is in "
+                        f"{direct.country}. Not opening. Use a {home} proxy, or add --allow-other-country.")
+        else:
+            print("[1/3] Picking a proxy ...")
+            if profile_data is not None:
+                proxy, geo = choose_proxy_for_profile(args, config, profile_data,
+                                                      args.allow_other_country, args.yes)
+            else:
+                proxy = choose_proxy(args, config)
+    except proxy_client.ProxyApiError as exc:
+        print(f"\nProxy API refused: {exc.message} (status {exc.status})")
+        if exc.fatal:
+            print("That looks permanent -- check the key in proxykey.txt.")
+        return 2
+    except profiles.CountryMismatch as exc:
+        print(f"\n      REFUSED     {exc}")
+        return 7
+    except profiles.NotConfirmed as exc:
+        print(f"      {exc}")
+        return 8
+    except browser.ProxyUnreachable as exc:
+        print(f"\nThe proxy is not working, so no browser was opened:\n      {exc}")
+        return 5
 
     launch_kwargs = dict(
         headless=config["headless"],
@@ -317,6 +444,7 @@ def main(argv=None) -> int:
         google_search=config["google_search"],
         storage_quota_mb=config["storage_quota_mb"],
         language=config["language"],
+        geo=geo,
     )
     profile = None
     if args.profile:
@@ -372,10 +500,6 @@ def main(argv=None) -> int:
                 if profile.data.get("memory_gb") not in (None, identity.memory_gb):
                     print(f"      note        this PC reports {identity.memory_gb} GB of memory; the profile "
                           f"was created on one reporting {profile.data['memory_gb']} GB")
-                home = profile.data.get("home_country")
-                if home and identity.country and identity.country != home:
-                    print(f"      WARNING     proxy is in {identity.country}, but this profile's home is "
-                          f"{home}. Sites may ask you to verify -- a same-country proxy is safer.")
             profiles.record_launch(profile, identity)
             profile.save()
             print(f"      fingerprint {session.seed}  (saved in the profile)")

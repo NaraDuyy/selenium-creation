@@ -32,6 +32,40 @@ class ProfileLocked(ProfileError):
     """Another run.bat already has this profile open."""
 
 
+class CountryMismatch(ProfileError):
+    """No usable proxy is in the profile's home country."""
+
+
+class NotConfirmed(ProfileError):
+    """The best proxy differs from home and the user did not say yes."""
+
+
+def home_of(data: dict) -> dict:
+    return {"country": data.get("home_country"), "asn": data.get("home_asn"),
+            "isp": data.get("home_isp"), "region": data.get("home_region")}
+
+
+def match(data: dict, info) -> tuple[int, list[str]]:
+    """Score how much a proxy looks like this profile's usual connection.
+
+    Same ISP counts double: changing provider is rarer than a new address in a
+    neighbouring province. Returns (score, human-readable differences).
+    """
+    home = home_of(data)
+    score, diffs = 0, []
+    if home["asn"] or home["isp"]:
+        if (home["asn"] and info.asn == home["asn"]) or (not home["asn"] and info.isp == home["isp"]):
+            score += 2
+        else:
+            diffs.append(f"different ISP: {info.network()} (usually {home['isp']} {home['asn'] or ''})".rstrip())
+    if home["region"]:
+        if info.region == home["region"]:
+            score += 1
+        else:
+            diffs.append(f"different province: {info.region or '?'} (usually {home['region']})")
+    return score, diffs
+
+
 @dataclass
 class Profile:
     name: str
@@ -69,8 +103,9 @@ class Profile:
         if self.is_new:
             return "not launched yet"
         screen = "x".join(str(v) for v in d.get("screen", []))
+        home = " / ".join(x for x in (d.get("home_country"), d.get("home_isp"), d.get("home_region")) if x)
         return (f"seed {d['seed']}, {d.get('cores')} cores, {d.get('memory_gb')} GB, {screen}, "
-                f"{d.get('language')}, {d.get('timezone')}, home {d.get('home_country') or '-'}")
+                f"{d.get('language')}, {d.get('timezone')}, home {home or '-'}")
 
 
 def _check_name(name: str) -> str:
@@ -201,3 +236,11 @@ def record_launch(profile: Profile, identity) -> None:
     profile.data["last_country"] = identity.country
     if not profile.data.get("home_country") and identity.country:
         profile.data["home_country"] = identity.country
+    if identity.country and identity.country == profile.data.get("home_country"):
+        # Fill in home ISP and province once, from the first proxy in the home country.
+        for key, value in (("home_isp", identity.isp), ("home_asn", identity.asn),
+                           ("home_region", identity.region)):
+            if value and not profile.data.get(key):
+                profile.data[key] = value
+    profile.data["last_isp"] = identity.isp
+    profile.data["last_region"] = identity.region
