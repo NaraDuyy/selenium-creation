@@ -10,6 +10,7 @@ __pycache__/
 *.py[cod]
 
 # Runtime artifacts
+saved/
 profiles/
 logs/
 latest_logs/

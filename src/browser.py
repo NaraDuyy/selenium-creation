@@ -295,26 +295,32 @@ def set_google_search(page, timeout_ms: int = 5000) -> None:
     """
     name, keyword, url = GOOGLE_SEARCH
     page.goto("chrome://settings/searchEngines")
-    page.locator("#addSearchEngine").click(timeout=timeout_ms)
-    page.locator("cr-input#searchEngine input").fill(name, timeout=timeout_ms)
-    page.locator("cr-input#keyword input").fill(keyword, timeout=timeout_ms)
-    page.locator("cr-input#queryUrl input").fill(url, timeout=timeout_ms)
-    page.locator("cr-button#actionButton").click(timeout=timeout_ms)
+    engines = page.evaluate(_ENGINES_JS)
+    if any(e["default"] and e["keyword"] == keyword for e in engines):
+        return  # a saved profile already has it
+    entry = page.locator("settings-search-engine-entry").filter(has_text=keyword)
+    if not any(e["keyword"] == keyword for e in engines):
+        page.locator("#addSearchEngine").click(timeout=timeout_ms)
+        page.locator("cr-input#searchEngine input").fill(name, timeout=timeout_ms)
+        page.locator("cr-input#keyword input").fill(keyword, timeout=timeout_ms)
+        page.locator("cr-input#queryUrl input").fill(url, timeout=timeout_ms)
+        page.locator("cr-button#actionButton").click(timeout=timeout_ms)
     # Find the row by its shortcut and use element ids, never button labels:
     # the settings page follows the browser language, which tracks the proxy.
-    entry = page.locator("settings-search-engine-entry").filter(has_text=keyword)
     entry.locator("cr-icon-button:not(#editIconButton)").click(timeout=timeout_ms)
     entry.locator("button#makeDefault").click(timeout=timeout_ms)
 
-    default = page.evaluate("""async () => {
-        const cr = await import('chrome://resources/js/cr.js');
-        const list = await cr.sendWithPromise('getSearchEnginesList');
-        const engine = [...(list.defaults || []), ...(list.actives || []), ...(list.others || [])]
-            .find(e => e.default);
-        return engine ? engine.name : null;
-    }""")
-    if default != name:
+    default = [e["name"] for e in page.evaluate(_ENGINES_JS) if e["default"]]
+    if default != [name]:
         raise RuntimeError(f"default search engine is still {default!r}")
+
+
+_ENGINES_JS = """async () => {
+    const cr = await import('chrome://resources/js/cr.js');
+    const list = await cr.sendWithPromise('getSearchEnginesList');
+    return [...(list.defaults || []), ...(list.actives || []), ...(list.others || [])]
+        .map(e => ({name: e.name, keyword: e.keyword, default: !!e.default}));
+}"""
 
 
 def _proxy_settings(proxy: Proxy | None) -> dict | None:
@@ -346,8 +352,13 @@ def _parse_window_size(window_size: str) -> tuple[int, int]:
 def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
            window_size="1280,860", fingerprint="random", match_geo=True,
            check_proxy=True, google_search=True, storage_quota_mb=STORAGE_QUOTA_MB,
-           language="en-US"):
+           language="en-US", pinned=None, cache_mb=None, portable_cookies=False,
+           downloads_dir=None):
     """Return a live Session on a fresh profile, routed through ``proxy``.
+
+    ``pinned`` holds a saved profile's cores, screen and timezone so the same
+    machine comes back every launch. ``downloads_dir`` keeps downloaded files,
+    which Playwright would otherwise delete when the browser closes.
 
     With ``check_proxy`` a proxy that carries no traffic raises ProxyUnreachable
     before any browser is started.
@@ -366,6 +377,8 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
     # while an English browser in Vietnam is an everyday combination.
     if language and str(language).strip().lower() != "auto":
         identity.locale = str(language).strip()
+    if pinned:
+        _apply_pinned(identity, pinned)
 
     # Headed: no viewport emulation, so the page tracks the real window and
     # outerWidth >= innerWidth stays coherent. Headless has no window to track.
@@ -373,6 +386,12 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
     extra_args = [f"--window-size={width},{height}"]
     if storage_quota_mb:
         extra_args.append(f"--fingerprint-storage-quota={int(storage_quota_mb)}")
+    if cache_mb:
+        extra_args.append(f"--disk-cache-size={int(cache_mb) * 1024 * 1024}")
+    if portable_cookies:
+        # Chromium 151+: cookies readable on another PC. Only works if on from
+        # the profile's first launch, which is why profiles store the choice.
+        extra_args.append("--fingerprint-portable-cookies")
 
     try:
         context = launch_persistent_context(
@@ -384,14 +403,32 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
             viewport=viewport,
         )
     except CloakBrowserLicenseError as exc:
-        raise LaunchError(f"CloakBrowser refused the license: {exc}") from exc
+        raise LaunchError(_license_message(exc)) from exc
 
-    page = context.pages[0] if context.pages else context.new_page()
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+        if downloads_dir:
+            _keep_downloads(context, Path(downloads_dir))
+        _prepare_page(page, identity, google_search)
+    except CloakBrowserLicenseError as exc:
+        # The key's session check can also land a moment after the browser starts.
+        try:
+            context.close()
+        except Exception:
+            pass
+        raise LaunchError(_license_message(exc)) from exc
+    return Session(context=context, page=page, identity=identity), profile_dir
+
+
+def _prepare_page(page, identity, google_search) -> None:
+    from cloakbrowser import CloakBrowserLicenseError
+    from playwright.sync_api import Error as PlaywrightError
+
     if google_search:
-        from playwright.sync_api import Error as PlaywrightError
-
         try:
             set_google_search(page)
+        except CloakBrowserLicenseError:
+            raise  # a RuntimeError too, but it means the browser is gone
         except (PlaywrightError, RuntimeError) as exc:
             # A browser without address-bar search is still worth handing over.
             reason = str(exc).splitlines()[0]
@@ -403,7 +440,56 @@ def launch(proxy: Proxy | None, *, profile_dir=None, headless=False,
             page.goto("about:blank")
         except PlaywrightError:
             pass
-    return Session(context=context, page=page, identity=identity), profile_dir
+
+
+def _apply_pinned(identity, pinned: dict) -> None:
+    """Hold a saved profile's machine fixed; note when the proxy disagrees."""
+    if pinned.get("cores"):
+        identity.cores = int(pinned["cores"])
+    if pinned.get("screen"):
+        identity.screen = tuple(pinned["screen"])
+    timezone = pinned.get("timezone")
+    if timezone and timezone != "auto":
+        if identity.timezone and identity.timezone != timezone:
+            identity.notes.append(
+                f"proxy is in {identity.timezone}, but this profile keeps {timezone} "
+                "-- a real PC's clock does not move; pick a proxy in the same timezone"
+            )
+        identity.timezone = timezone
+
+
+def _keep_downloads(context, folder: Path) -> None:
+    """Copy every download into the profile before Playwright deletes it."""
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def save(download):
+        target = folder / download.suggested_filename
+        stem, suffix, n = target.stem, target.suffix, 1
+        while target.exists():
+            target = folder / f"{stem} ({n}){suffix}"
+            n += 1
+        try:
+            download.save_as(target)
+            print(f"      downloaded  {target.name}  -> {folder}")
+        except Exception as exc:
+            print(f"      download of {download.suggested_filename} failed: {exc}")
+
+    def watch(page):
+        page.on("download", save)
+
+    for page in context.pages:
+        watch(page)
+    context.on("page", watch)
+
+
+def _license_message(exc) -> str:
+    text = str(exc)
+    if "session limit" in text.lower():
+        return ("Another CloakBrowser is already open on this key -- the free key allows "
+                "one browser at a time, across all your PCs. Close the other one (on this "
+                "PC or the other), wait a minute, and try again.")
+    return f"CloakBrowser refused the license: {text}"
+
 
 
 def shutdown(session: Session) -> None:
@@ -416,12 +502,15 @@ def shutdown(session: Session) -> None:
 
 def open_url(session: Session, url: str, attempts: int = 2) -> None:
     """Navigate, retrying once: residential proxies and sites drop the odd connection."""
+    from cloakbrowser import CloakBrowserLicenseError
     from playwright.sync_api import Error as PlaywrightError
 
     for attempt in range(1, attempts + 1):
         try:
             session.page.goto(url, wait_until="domcontentloaded")
             return
+        except CloakBrowserLicenseError as exc:
+            raise LaunchError(_license_message(exc)) from exc
         except PlaywrightError as exc:
             reason = str(exc).splitlines()[0]
             if attempt == attempts:

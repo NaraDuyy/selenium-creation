@@ -80,6 +80,53 @@ A `CLOAKBROWSER_LICENSE_KEY` already set in Windows takes priority over `.env`.
 Either one beats a key saved by `cloakbrowser login`
 (`%USERPROFILE%\.cloakbrowser\license.key`), which is only used when neither is set.
 
+## Saved profiles
+
+Without `--profile`, every run is a brand-new computer that is thrown away on
+close. A saved profile is the opposite: the **same computer every time** --
+same fingerprint, same cookies and logins, same history.
+
+```bat
+run.bat --profile shop1              :: create on first use, reopen after
+run.bat --profiles                   :: list saved profiles
+run.bat --delete-profile shop1       :: delete one (asks first; --yes skips)
+run.bat --profile shop1 --portable   :: new profile whose logins survive a move to another PC
+```
+
+Each profile is one folder under `saved/` (gitignored):
+
+```
+saved/shop1/
+  profile.json   the identity: seed, CPU threads, memory, screen, timezone,
+                 language, storage size, cache size, home country, usage log
+  browser/       CloakBrowser's own data: cookies, logins, history, bookmarks,
+                 site storage, saved passwords, cache (capped at 100 MB)
+  downloads/     files downloaded in this profile
+  .lock          only while the profile is open
+```
+
+**What stays fixed.** The first launch rolls an identity and writes it to
+`profile.json`. Every later launch reuses it: the seed recreates the GPU,
+canvas, audio and fonts; threads, screen, window, language, storage size and
+**timezone** are read back. `--fingerprint` and `--language` are ignored for an
+existing profile, and say so.
+
+**Proxies.** A profile does not store a proxy -- pick one each run as usual.
+The profile remembers its **home country** from the first proxied launch and
+prints a `WARNING` when a later proxy is somewhere else. The timezone stays
+where it was (a real PC's clock does not move); if a new proxy is in another
+timezone you get a note. In one-timezone countries like Vietnam this never
+comes up; in Russia or the US, pick proxies in the same region.
+
+**Memory** is always this PC's real value, so opening a profile on a PC with a
+different amount of RAM prints a note. **Portable cookies** can only be chosen
+when the profile is created: Windows encrypts saved logins for one user account,
+so without `--portable` a copied profile opens signed out.
+
+**One profile, one window.** While a profile is open, a second `run.bat` on it is
+refused -- two browsers writing one folder corrupt it. A lock left by a crash
+is cleared automatically.
+
 ## Flags
 
 Anything you pass to `run.bat` goes straight to the script:
@@ -99,6 +146,10 @@ Anything you pass to `run.bat` goes straight to the script:
 | `--language <l>` | Browser language for this run, e.g. `en-US`, `vi-VN`, or `auto` to follow the proxy |
 | `--fingerprint <n>` | Reuse a fingerprint seed printed by an earlier run instead of rolling a new one |
 | `--skip-proxy-check` | Open the browser even when the proxy check says the proxy carries no traffic |
+| `--profile <name>` | Open a saved profile, creating it on first use |
+| `--profiles` | List saved profiles |
+| `--delete-profile <name>` | Delete a saved profile (asks first; add `--yes` to skip) |
+| `--portable` | With a new profile: keep its logins working if copied to another PC |
 | `--keep-profile` | Don't delete the throwaway browser profile on exit |
 
 ```bat

@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import browser
+import profiles
 import proxy_client
 import static_proxy
 
@@ -126,6 +127,13 @@ def parse_args(argv):
                         help="open the browser even if the proxy carries no traffic")
     parser.add_argument("--keep-profile", action="store_true",
                         help="do not delete the throwaway browser profile on exit")
+    parser.add_argument("--profile", metavar="NAME",
+                        help="open a saved profile (created on first use) -- same computer every time")
+    parser.add_argument("--profiles", action="store_true", help="list saved profiles and exit")
+    parser.add_argument("--delete-profile", metavar="NAME", help="delete a saved profile and exit")
+    parser.add_argument("--portable", action="store_true",
+                        help="new profile only: keep its logins working if copied to another PC")
+    parser.add_argument("--yes", action="store_true", help="do not ask before deleting")
     parser.add_argument("--check", action="store_true",
                         help="print the exit IP the browser is really using, then quit")
     return parser.parse_args(argv)
@@ -215,10 +223,51 @@ def wait_until_closed(session) -> None:
         print("\nBrowser window closed.")
 
 
+def show_profiles() -> int:
+    saved = profiles.list_profiles()
+    if not saved:
+        print("No saved profiles yet. Create one with:  run.bat --profile NAME")
+        return 0
+    print(f"{'NAME':16} {'LAST USED':19} {'RUNS':>4} {'SIZE':>8}  IDENTITY")
+    for p in saved:
+        size = profiles.folder_size(p.path) / 1e6
+        locked = "  (open now)" if p.lock_path.exists() else ""
+        print(f"{p.name:16} {p.data.get('last_used', '-'):19} {p.data.get('launches', 0):>4} "
+              f"{size:>6.1f}MB  {p.summary()}{locked}")
+    print(f"\n{len(saved)} profile(s) in {profiles.SAVED_ROOT}")
+    return 0
+
+
+def remove_profile(name: str, assume_yes: bool) -> int:
+    try:
+        profile = profiles.open_profile(name)
+        if not profile.path.exists():
+            print(f"No saved profile named {name!r}. See:  run.bat --profiles")
+            return 6
+        size = profiles.folder_size(profile.path) / 1e6
+        if not assume_yes:
+            answer = input(f"Delete profile {name!r} ({size:.1f} MB) with its cookies and "
+                           "history? This cannot be undone. [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                print("Kept.")
+                return 0
+        profiles.delete_profile(name)
+        print(f"Deleted profile {name!r} ({size:.1f} MB freed).")
+        return 0
+    except profiles.ProfileError as exc:
+        print(exc)
+        return 6
+
+
 def main(argv=None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     env_loaded = load_env()
     config = load_config()
+
+    if args.profiles:
+        return show_profiles()
+    if args.delete_profile:
+        return remove_profile(args.delete_profile, args.yes)
 
     if args.language:
         config["language"] = args.language
@@ -259,25 +308,79 @@ def main(argv=None) -> int:
                 print("That looks permanent -- check the key in proxykey.txt.")
             return 2
 
+    launch_kwargs = dict(
+        headless=config["headless"],
+        window_size=config["window_size"],
+        fingerprint=config["fingerprint"],
+        match_geo=config["match_proxy_geo"],
+        check_proxy=config["check_proxy"],
+        google_search=config["google_search"],
+        storage_quota_mb=config["storage_quota_mb"],
+        language=config["language"],
+    )
+    profile = None
+    if args.profile:
+        try:
+            profile = profiles.open_profile(args.profile)
+            profiles.lock(profile)
+        except profiles.ProfileError as exc:
+            print(f"\n{exc}")
+            return 6
+        launch_kwargs.update(profile_dir=profile.browser_dir, downloads_dir=profile.downloads_dir,
+                             cache_mb=profile.data.get("cache_mb", profiles.CACHE_MB))
+        if profile.is_new:
+            launch_kwargs["portable_cookies"] = args.portable
+        else:
+            saved = profile.data
+            ignored = [flag for flag, given in (("--fingerprint", args.fingerprint),
+                                                ("--language", args.language),
+                                                ("--portable", args.portable)) if given]
+            if ignored:
+                print(f"      note        {', '.join(ignored)} ignored: profile {profile.name!r} "
+                      "keeps the settings it was created with")
+            launch_kwargs.update(
+                fingerprint=saved["seed"],
+                window_size=saved.get("window_size", config["window_size"]),
+                language=saved.get("language") or config["language"],
+                storage_quota_mb=saved.get("storage_quota_mb", config["storage_quota_mb"]),
+                portable_cookies=saved.get("portable_cookies", False),
+                pinned=profiles.pinned_settings(profile),
+            )
+
     print("[2/3] Launching CloakBrowser ...")
     session = None
     profile_dir = None
     try:
-        session, profile_dir = browser.launch(
-            proxy,
-            headless=config["headless"],
-            window_size=config["window_size"],
-            fingerprint=config["fingerprint"],
-            match_geo=config["match_proxy_geo"],
-            check_proxy=config["check_proxy"],
-            google_search=config["google_search"],
-            storage_quota_mb=config["storage_quota_mb"],
-            language=config["language"],
-        )
-        print(f"      profile     {profile_dir.name}")
-        print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")
-        print(f"      identity    {session.identity.describe()}")
-        for note in session.identity.notes:
+        session, profile_dir = browser.launch(proxy, **launch_kwargs)
+        identity = session.identity
+        if profile is None:
+            print(f"      profile     {profile_dir.name}")
+            print(f"      fingerprint {session.seed}  (reuse with --fingerprint {session.seed})")
+        else:
+            if profile.is_new:
+                timezone = identity.timezone or session.page.evaluate(
+                    "Intl.DateTimeFormat().resolvedOptions().timeZone")
+                profiles.record_first_launch(
+                    profile, identity, timezone=timezone,
+                    window_size=launch_kwargs["window_size"],
+                    storage_quota_mb=launch_kwargs["storage_quota_mb"],
+                    cache_mb=launch_kwargs["cache_mb"], portable=args.portable)
+                print(f"      profile     {profile.name}  (NEW -- identity saved)")
+            else:
+                print(f"      profile     {profile.name}  (launch #{profile.data.get('launches', 0) + 1}, "
+                      f"created {profile.data.get('created', '?')[:10]})")
+                if profile.data.get("memory_gb") not in (None, identity.memory_gb):
+                    print(f"      note        this PC reports {identity.memory_gb} GB of memory; the profile "
+                          f"was created on one reporting {profile.data['memory_gb']} GB")
+                home = profile.data.get("home_country")
+                if home and identity.country and identity.country != home:
+                    print(f"      WARNING     proxy is in {identity.country}, but this profile's home is "
+                          f"{home}. Sites may ask you to verify -- a same-country proxy is safer.")
+            profiles.record_launch(profile, identity)
+            profile.save()
+            print(f"      fingerprint {session.seed}  (saved in the profile)")
+        print(f"      identity    {identity.describe()}")
+        for note in identity.notes:
             print(f"      note        {note}")
         if args.check:
             print("[3/3] Verifying the connection")
@@ -305,7 +408,9 @@ def main(argv=None) -> int:
     finally:
         if session is not None:
             browser.shutdown(session)
-        if profile_dir is not None and not config["keep_profile"]:
+        if profile is not None:
+            profiles.unlock(profile)
+        elif profile_dir is not None and not config["keep_profile"]:
             browser.discard_profile(profile_dir)
 
     return 0
