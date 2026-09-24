@@ -21,8 +21,15 @@ SEED_MIN, SEED_MAX = 10000, 99999
 # Common real-world values. Repeats weight the draw toward what most PCs report.
 SCREENS = [(1920, 1080), (1920, 1080), (1920, 1080), (1536, 864), (1600, 900),
            (1680, 1050), (1440, 900), (2560, 1440), (1366, 768)]
-CORES = [4, 6, 8, 8, 8, 12, 12, 16]
-MEMORY_GB = [4, 8, 8, 8]  # Chrome caps navigator.deviceMemory at 8
+# CPU threads that real PCs pair with each amount of memory, as (threads, weight).
+# Memory itself is never invented: CloakBrowser's Sec-CH-Device-Memory header
+# always reports the real machine, so navigator.deviceMemory has to match it.
+THREADS_BY_MEMORY = {
+    32: [(12, 25), (16, 35), (20, 15), (24, 15), (32, 10)],
+    16: [(8, 15), (12, 35), (16, 35), (20, 15)],
+    8: [(4, 20), (8, 50), (12, 30)],
+}
+DEVICE_MEMORY_MAX = 32  # Chrome 153 reports up to 32; it used to stop at 8
 SCREEN_CHROME_MARGIN = 140  # Windows taskbar (~48px) + tabs and address bar (~85px)
 
 # Primary language a browser in that country usually reports.
@@ -148,17 +155,60 @@ def pick_seed(fingerprint) -> int:
         ) from None
 
 
-def roll_hardware(seed: int, window: tuple[int, int]) -> tuple[int, int, tuple[int, int]]:
-    """Cores, memory and screen drawn from the seed, so one seed is one machine.
+def real_device_memory() -> int:
+    """The navigator.deviceMemory value Chrome reports for this PC's real RAM.
+
+    Follows Chromium's ApproximatedDeviceMemory: round the installed megabytes
+    to the nearest power of two, then clamp to 0.25-32 GB. Falls back to 16.
+    """
+    try:
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
+                        ("total_phys", ctypes.c_ulonglong), ("avail_phys", ctypes.c_ulonglong),
+                        ("total_page", ctypes.c_ulonglong), ("avail_page", ctypes.c_ulonglong),
+                        ("total_virtual", ctypes.c_ulonglong), ("avail_virtual", ctypes.c_ulonglong),
+                        ("avail_ext", ctypes.c_ulonglong)]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+        megabytes = status.total_phys // (1024 * 1024)
+    except Exception:
+        try:
+            import os
+            megabytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1024 * 1024)
+        except Exception:
+            return 16
+    if megabytes <= 0:
+        return 16
+    lower = 1 << (int(megabytes).bit_length() - 1)
+    upper = lower << 1
+    nearest = lower if megabytes - lower <= upper - megabytes else upper
+    gigabytes = nearest / 1024
+    return int(min(max(gigabytes, 0.25), DEVICE_MEMORY_MAX)) or 1
+
+
+def roll_hardware(seed: int, window: tuple[int, int],
+                  memory_gb: int | None = None) -> tuple[int, int, tuple[int, int]]:
+    """Threads, memory and screen for one seed, so one seed is one machine.
+
+    Memory is this PC's real value (see real_device_memory); threads are drawn
+    from what real machines with that much memory have, so no 12-thread PC
+    turns up with 4 GB.
 
     The screen must hold the window plus the taskbar and browser toolbar;
     otherwise Chromium clamps outerHeight below innerHeight, a contradiction no
     real browser shows (seen on 1600x900 with an 860px-tall window).
     """
     rng = random.Random(seed)
+    memory_gb = memory_gb or real_device_memory()
+    table = THREADS_BY_MEMORY[max(k for k in THREADS_BY_MEMORY if k <= max(memory_gb, 8))]
+    threads = rng.choices([t for t, _ in table], weights=[w for _, w in table])[0]
     screens = [s for s in SCREENS
                if s[0] >= window[0] and s[1] >= window[1] + SCREEN_CHROME_MARGIN] or [(2560, 1440)]
-    return rng.choice(CORES), rng.choice(MEMORY_GB), rng.choice(screens)
+    return threads, memory_gb, rng.choice(screens)
 
 
 def _proxy_url(proxy: Proxy) -> str:

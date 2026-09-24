@@ -218,8 +218,11 @@ automation flags), driven through Playwright. `setup.bat` downloads the binary
 
 **Random every launch.** With `"fingerprint": "random"` a new seed is rolled
 each run and printed. The seed drives CloakBrowser's canvas, audio and GPU
-patches, and also picks CPU cores, memory and screen size from common real-world
-values. The screen always has room for the window plus taskbar and toolbar, so
+patches, and also picks CPU threads and screen size from common real-world
+values. Memory is not invented: CloakBrowser's `Sec-CH-Device-Memory` header
+always reports the real PC, so `navigator.deviceMemory` is set to the same
+value (Chrome's rounding of the installed RAM, capped at 32) and the threads
+are drawn from what real machines with that much memory have. The screen always has room for the window plus taskbar and toolbar, so
 with the default `window_size` of `1280,860` only 1680x1050, 1920x1080 and
 2560x1440 are drawn — a smaller window unlocks more screen sizes.
 `run.bat --fingerprint 48213` brings back the same machine.
